@@ -1,0 +1,3 @@
+[submodule "pynetbox"]
+	path = pynetbox
+	url = https://github.com/tardoe/pynetbox.git

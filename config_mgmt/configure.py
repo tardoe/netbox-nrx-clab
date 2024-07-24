@@ -10,6 +10,7 @@ def main():
     # Netbox configuration params, optional via ENVVAR
     parser.add_argument("-t", dest="nb_token", default=os.environ.get("NB_TOKEN"))
     parser.add_argument("-H", dest="nb_host", default=os.environ.get("NB_HOST"))
+    parser.add_argument("-b", dest="nb_branch", default="")
 
     # Device credentials
     parser.add_argument("-u", dest="username", default="admin")
@@ -51,7 +52,7 @@ def main():
     template_loader = jinja2.FileSystemLoader(searchpath=args.template_path)
     template_env = jinja2.Environment(loader=template_loader)
 
-    devices = [d for d in nb.dcim.devices.filter(tag="demo")]
+    devices = [d for d in nb.dcim.devices.filter(tag="demo", branch=args.nb_branch)]
 
     for d in devices:
         supported_templates = None
@@ -61,7 +62,7 @@ def main():
             supported_templates = ["complete"]
 
         configs = []
-        templ_vars = build_template_vars(nb, d)
+        templ_vars = build_template_vars(nb, d, args.nb_branch)
 
         # Locate and render templates
         log_for_device(d, "Rendering config")
@@ -142,13 +143,13 @@ def print_params_summary(args):
     log_from_global(f"Diff: {args.diff}")
 
 
-def build_template_vars(nb, device):
+def build_template_vars(nb, device, branch):
     """Query Netbox for the data needed to fill the templates"""
     log_for_device(device, "Building template variables")
 
-    interfaces = get_nb_interfaces(nb, device)
-    peers = get_link_peer_devices(nb, interfaces)
-    pods = [i.name.split(" ")[1] for i in nb.dcim.locations.all() if "Pod" in i.name]
+    interfaces = get_nb_interfaces(nb, device, branch)
+    peers = get_link_peer_devices(nb, interfaces, branch)
+    pods = [i.name.split(" ")[1] for i in nb.dcim.locations.all(branch=branch) if "Pod" in i.name]
     isis_address = generate_isis_iso_addr(device)
     device_tags = [t["name"] for t in device["tags"]]
 
@@ -162,11 +163,11 @@ def build_template_vars(nb, device):
     }
 
 
-def get_nb_interfaces(nb, device):
+def get_nb_interfaces(nb, device, branch):
     """Collect all cabled interface and query their IPs"""
     interfaces = {}
     nb_interfaces = [
-        i for i in nb.dcim.interfaces.filter(device=device.name, cabled=True)
+        i for i in nb.dcim.interfaces.filter(device=device.name, cabled=True, branch=branch)
     ]
 
     # grab IPs on those interfaces
@@ -174,14 +175,14 @@ def get_nb_interfaces(nb, device):
         interfaces[i.name] = dict(i)
         nb_ips = [
             ip
-            for ip in nb.ipam.ip_addresses.filter(device=device.name, interface=i.name)
+            for ip in nb.ipam.ip_addresses.filter(device=device.name, interface=i.name, branch=branch)
         ]
         interfaces[i.name]["ip_addresses"] = nb_ips
 
     return interfaces
 
 
-def get_link_peer_devices(nb, interfaces):
+def get_link_peer_devices(nb, interfaces, branch):
     """For generating BGP configs and description, discover the device on the other end of a link"""
     peers = {}
 
@@ -190,7 +191,8 @@ def get_link_peer_devices(nb, interfaces):
             peer = [
                 p
                 for p in nb.dcim.devices.filter(
-                    name=interface["link_peers"][0]["device"]["name"]
+                    name=interface["link_peers"][0]["device"]["name"],
+                    branch=branch
                 )
             ][0]
             peers[peer["name"]] = {}
@@ -201,6 +203,7 @@ def get_link_peer_devices(nb, interfaces):
                 for i in nb.ipam.ip_addresses.filter(
                     interface=interface["link_peers"][0]["name"],
                     device=interface["link_peers"][0]["device"]["name"],
+                    branch=branch
                 )
             ][0]
             peers[peer["name"]]["remote_ip"] = ip.address
